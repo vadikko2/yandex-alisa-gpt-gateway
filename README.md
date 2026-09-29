@@ -37,9 +37,9 @@
 
 Сменить AI-агента: новый access id и ключ в тех же двух переменных Apps, код шлюза не меняется.
 
-### Prompt: deploy the full stack with Timeweb skills
+### Промпт для агента: поднять весь контур в Timeweb
 
-Copy into any agent that can use `.agents/skills/` and Timeweb Cloud MCP. Read `$timeweb-ai`, `$timeweb-apps`, and `$timeweb-domains` skill files first. Follow AGENTS.md. Quote prices and get explicit confirmation before every billable step. Never commit secrets.
+Ниже готовый текст **на английском** — его копируют в Cursor/Codex и т.п. Агент должен сначала прочитать скилы `$timeweb-ai`, `$timeweb-apps`, `$timeweb-domains`, следовать `AGENTS.md`, перед платным шагом назвать цену и ждать подтверждения, секреты в git не коммитить.
 
 ```text
 Goal: deploy the Yandex Alice webhook gateway from this repository on Timeweb Cloud.
