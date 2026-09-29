@@ -21,7 +21,7 @@ from alice_gateway.service.handlers.commands.reply import (
     fit_alice_text,
 )
 from alice_gateway.service.models.commands.reply import ReplyToUtteranceCommand, ReplyToUtteranceResult
-from alice_gateway.shared.settings import Settings
+from alice_gateway.shared.settings import Settings, load_settings, read_system_prompt
 
 
 class ScriptedLanguageModel:
@@ -42,6 +42,7 @@ def _settings(**overrides: object) -> Settings:
         "timeweb_api_key": "test-key",
         "timeweb_base_url": "https://agent.example/v1",
         "alice_reply_budget_seconds": 2,
+        "system_prompt": "test system prompt",
     }
     values.update(overrides)
     return Settings(**values)  # type: ignore[arg-type]
@@ -194,3 +195,12 @@ def test_health_and_welcome_over_http(monkeypatch: pytest.MonkeyPatch) -> None:
         assert body["response"]["text"] == WELCOME_TEXT
         assert body["response"]["end_session"] is False
         assert body["version"] == "1.0"
+
+
+def test_system_prompt_is_loaded_from_markdown_file(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prompt_file = tmp_path / "custom.md"
+    prompt_file.write_text("Кастомный system prompt\n", encoding="utf-8")
+    monkeypatch.setenv("SYSTEM_PROMPT_PATH", str(prompt_file))
+    settings = load_settings(base_dir=tmp_path)
+    assert settings.system_prompt == "Кастомный system prompt"
+    assert "Кастомный" in read_system_prompt(prompt_file)

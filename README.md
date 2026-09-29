@@ -17,12 +17,13 @@
 ## Оглавление
 
 1. [Как это устроено](#как-это-устроено)
-2. [Запуск у себя](#запуск-у-себя)
-3. [Навык в Яндекс Диалогах](#навык-в-яндекс-диалогах)
-4. [Куда смотреть в коде](#куда-смотреть-в-коде)
-5. [Другой провайдер](#другой-провайдер)
-6. [Деплой в Timeweb Cloud](#деплой-в-timeweb-cloud)
-7. [Промпт для агента: поднять весь контур в Timeweb](#промпт-для-агента-поднять-весь-контур-в-timeweb)
+2. [Промпты шлюза](#промпты-шлюза)
+3. [Запуск у себя](#запуск-у-себя)
+4. [Навык в Яндекс Диалогах](#навык-в-яндекс-диалогах)
+5. [Куда смотреть в коде](#куда-смотреть-в-коде)
+6. [Другой провайдер](#другой-провайдер)
+7. [Деплой в Timeweb Cloud](#деплой-в-timeweb-cloud)
+8. [Промпт для агента: поднять весь контур в Timeweb](#промпт-для-агента-поднять-весь-контур-в-timeweb)
 
 ## Как это устроено
 
@@ -37,7 +38,18 @@
 3. Ответ укладывается в формат Диалогов. Если модель не успела за бюджет времени — «Думаю…», ответ дочитывается, пользователь говорит «дальше».
 4. `GET /health` нужен хостингу: платформа видит, что процесс жив.
 
-Характер помощника задаётся его system prompt (у провайдера) и опционально коротким `SYSTEM_PROMPT` шлюза. Температуру и лимит длины шлюз в запрос по умолчанию не кладёт — это настройки модели на стороне провайдера.
+Характер помощника задаётся его system prompt (у провайдера) и промптом шлюза из файла (см. ниже). Температуру и лимит длины шлюз в запрос по умолчанию не кладёт — это настройки модели на стороне провайдера.
+
+## Промпты шлюза
+
+Тексты system prompt лежат в каталоге [`prompts/`](prompts/) в формате Markdown (`.md`). Их можно менять без правки Python-кода.
+
+- По умолчанию используется [`prompts/alice_system.md`](prompts/alice_system.md).
+- В окружении задаётся только путь: `SYSTEM_PROMPT_PATH=prompts/alice_system.md` (см. `example.env`).
+- Относительный путь считается от рабочей директории процесса (в контейнере обычно корень приложения; каталог `prompts/` копируется в образ).
+- После смены файла перезапустите процесс или пересоберите и выкатите образ, если промпт зашит в деплой.
+
+Промпт самой модели у провайдера LLM — отдельный; файл из `prompts/` его не заменяет, а дополняет на каждый запрос.
 
 ## Запуск у себя
 
@@ -84,6 +96,7 @@ curl -s http://127.0.0.1:8080/alice \
 - `GET /health` — проверка живости.
 - Вопрос обрабатывает команда `ReplyToUtterance` через `python-cqrs`.
 - К модели ходит порт `LanguageModel`. Пока ключ и адрес пустые, отвечает заглушка.
+- System prompt шлюза: файлы в `prompts/`, путь в `SYSTEM_PROMPT_PATH`.
 - Корневой `Dockerfile` собирает контейнер на порту `8080` (нужен `curl` для health-проб на многих платформах). Свою инструкцию `HEALTHCHECK` в Dockerfile лучше не ставить, если хостинг сам дергает `/health`.
 
 ## Другой провайдер
@@ -108,18 +121,20 @@ This repo is an Alice skill webhook. It calls a language model through the
 LanguageModel port in src/alice_gateway/service/ports/language_model.py.
 complete() takes a list of chat messages and returns assistant text.
 
-The current adapter is TimewebLanguageModel in
+There is already an OpenAI-compatible adapter in
 src/alice_gateway/infrastructure/adapters/language_model.py.
 build_language_model in src/alice_gateway/presentation/wiring/container.py
 picks the adapter. Settings live in src/alice_gateway/shared/settings.py.
+System prompt text is loaded from a Markdown file under prompts/
+(path from SYSTEM_PROMPT_PATH).
 
 Add an adapter for the direct <provider, for example OpenAI> API.
-Subclass LanguageModel, put the class next to TimewebLanguageModel,
+Subclass LanguageModel, put the class next to the existing adapter,
 wire it in build_language_model, and add environment variables for the API key,
 base URL, and model name. Do not log the key.
 Do not change the /alice webhook, the ReplyToUtterance handler, or the Alice
 response shape. Cover the adapter with an HTTP mock test, the same way the
-Timeweb adapter is already tested.
+existing adapter is already tested.
 ```
 
 ## Деплой в Timeweb Cloud
@@ -148,7 +163,7 @@ TIMEWEB_MODEL=deepseek-v4-flash
 
 `TIMEWEB_BASE_URL` — без хвоста `/chat/completions`. Имя в `TIMEWEB_MODEL` агент Timeweb не читает: отвечает модель из панели. Поле нужно, когда тот же шлюз смотрит в обычный OpenAI-совместимый API.
 
-`SYSTEM_PROMPT` шлюз добавляет к каждому вопросу; промпт агента в панели он не заменяет.
+Промпт шлюза — файл из `prompts/` (`SYSTEM_PROMPT_PATH`); промпт агента в панели он не заменяет. После правки `.md` нужна новая сборка Apps: каталог `prompts/` копируется в образ.
 
 Смена агента: новый access id и ключ в тех же двух переменных, перезапуск. Документация: [OpenAI-совместимый API агентов](https://timeweb.cloud/docs/ai-agents/api-usage/openai-compatible-api).
 
@@ -159,7 +174,7 @@ TIMEWEB_MODEL=deepseek-v4-flash
 1. Apps → создать → backend, репозиторий и ветка с этим Dockerfile.
 2. Язык **Docker**, пустые build/run, порт из `EXPOSE 8080`.
 3. Health check: `GET /health` → `{"status":"ok"}`. В образе есть `curl`.
-4. Переменные: `TIMEWEB_API_KEY`, `TIMEWEB_BASE_URL`, по желанию `SYSTEM_PROMPT`, `TIMEWEB_MODEL`, `ALICE_REPLY_BUDGET_SECONDS`.
+4. Переменные: `TIMEWEB_API_KEY`, `TIMEWEB_BASE_URL`, по желанию `SYSTEM_PROMPT_PATH`, `TIMEWEB_MODEL`, `ALICE_REPLY_BUDGET_SECONDS`. Каталог `prompts/` входит в образ.
 5. Плата — тариф в месяц плюс публичный IP. Удалить приложение через API нельзя.
 6. Домен: купить в панели руками, привязать к Apps (скилы или карточка). Сертификат выпускает Timeweb. Пока зона не опубликована — технический домен Apps: `https://<технический-домен>/alice`.
 
@@ -185,7 +200,8 @@ Repository facts:
   - Endpoints: GET /health -> {"status":"ok"}; POST /alice -> Alice Dialogs JSON.
   - Image must include curl (Timeweb health probe uses it). Do not add Dockerfile HEALTHCHECK.
   - Env vars (see example.env): TIMEWEB_API_KEY, TIMEWEB_BASE_URL (agent root, NO /chat/completions),
-    TIMEWEB_MODEL, SYSTEM_PROMPT, ALICE_REPLY_BUDGET_SECONDS=3, HOST=0.0.0.0, PORT=8080.
+    TIMEWEB_MODEL, SYSTEM_PROMPT_PATH=prompts/alice_system.md, ALICE_REPLY_BUDGET_SECONDS=3,
+    HOST=0.0.0.0, PORT=8080. Dockerfile must COPY the prompts/ directory.
   - Gateway picks TimewebLanguageModel only when BOTH TIMEWEB_API_KEY and TIMEWEB_BASE_URL are set;
     otherwise users hear a stub message that the model is not configured.
 
@@ -220,7 +236,7 @@ Use Timeweb MCP via skills ($timeweb-ai, $timeweb-apps, $timeweb-domains, $timew
    - Set envs at create time (values for secrets: ask user or use panel after create):
      TIMEWEB_BASE_URL=https://agent.timeweb.cloud/api/v1/cloud-ai/agents/<access-id>/v1
      TIMEWEB_MODEL=deepseek-v4-flash (or matching model slug)
-     SYSTEM_PROMPT=<short Russian Alice gateway prompt from example.env>
+     SYSTEM_PROMPT_PATH=prompts/alice_system.md
      ALICE_REPLY_BUDGET_SECONDS=3
      HOST=0.0.0.0
      PORT=8080
