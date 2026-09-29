@@ -11,7 +11,7 @@ dev = [
 
 [project]
 authors = [
-  {name = "Вадим Козыревский", email = "v.kozyrevskiy@timeweb.ru"},
+  {name = "Вадим Козыревский"},
 ]
 dependencies = [
   "dependency-injector>=4.49.1",
