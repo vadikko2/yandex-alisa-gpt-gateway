@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local Timeweb MCP token (same layout as ai-fitness-tgbot)
+.cursor/mcp.json
+
+# graphify
+graphify-out/

@@ -1,0 +1,12 @@
+.git
+.venv
+.cursor
+.agents
+graphify-out
+tests
+.env
+example.env
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache

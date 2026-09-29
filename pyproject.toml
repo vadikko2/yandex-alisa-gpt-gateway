@@ -1,0 +1,42 @@
+[build-system]
+build-backend = "uv_build"
+requires = ["uv_build>=0.12.8,<0.13.0"]
+
+[dependency-groups]
+dev = [
+  "pytest>=9.0.0",
+  "pytest-asyncio>=1.2.0",
+  "ruff>=0.14.0",
+]
+
+[project]
+authors = [
+  {name = "Вадим Козыревский", email = "v.kozyrevskiy@timeweb.ru"},
+]
+dependencies = [
+  "dependency-injector>=4.49.1",
+  "fastapi>=0.135.0",
+  "httpx>=0.28.1",
+  "pydantic-settings>=2.11.0",
+  "python-cqrs>=4.13.0,<5",
+  "uvicorn>=0.41.0",
+]
+description = "Yandex Alice webhook gateway to a swappable OpenAI-compatible agent"
+name = "alice-gateway"
+requires-python = ">=3.13"
+version = "0.1.0"
+
+[project.scripts]
+alice-gateway = "alice_gateway.presentation.main:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
