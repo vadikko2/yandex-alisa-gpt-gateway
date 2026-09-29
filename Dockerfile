@@ -4,6 +4,11 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
+# Timeweb Apps probes /health with curl inside the container. Slim does not ship it.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=ghcr.io/astral-sh/uv:0.12.8 /uv /usr/local/bin/uv
 
 ENV UV_COMPILE_BYTECODE=1 \

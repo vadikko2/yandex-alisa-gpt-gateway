@@ -76,7 +76,13 @@ TIMEWEB_MODEL=deepseek-v4-flash
 6. Переменные: `TIMEWEB_API_KEY`, `TIMEWEB_BASE_URL`, при желании `SYSTEM_PROMPT`, `TIMEWEB_MODEL`, `ALICE_REPLY_BUDGET_SECONDS`. Их задают при создании или потом в панели. Значения в API маскируются.
 7. Тариф backend — цена пресета в месяц плюс отдельный публичный IP. Приложение нельзя удалить через API: пока оно не удалено в панели, оно тарифицируется. Пауза не обещает остановку списаний.
 
-Текущий выклад этого репозитория: приложение **Yandex Alice Gateway** в проекте Yandex Alisa GPT, пресет backend 1 vCPU / 1 ГБ (ru-1). Технический домен смотрите в карточке приложения.
+Текущий выклад в проекте [Yandex Alisa GPT](https://timeweb.cloud/my/projects/2979147):
+
+- Агент **Alice DeepSeek**, модель DeepSeek V4 Flash, pay-as-you-go (пакет токенов при создании не покупался). Access id: `ce9cf23b-3843-47d8-bcf4-7dcecfc00bb0`. Thinking выключен, `max_tokens` 512.
+- Приложение **Yandex Alice Gateway** (id 261951), Docker, пресет backend 1 vCPU / 1 ГБ / ru-1 — 510 ₽ в месяц плюс публичный IP. Health check: `/health`.
+- Webhook: `https://vadikko2-yandex-alisa-gpt-gateway-2b7f.twc1.net/alice`
+
+`TIMEWEB_BASE_URL` в приложении уже указывает на этого агента. Ключ доступа агента API не отдаёт: его показывают в карточке агента, раздел API. Пока переменной `TIMEWEB_API_KEY` нет, шлюз отвечает заглушкой. Вставьте ключ в переменные приложения в панели и перезапустите.
 
 ## Навык Алисы
 
