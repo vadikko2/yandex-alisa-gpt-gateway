@@ -1,8 +1,8 @@
 # Шлюз Алисы к своему помощнику
 
-Алиса открывает навык и задаёт ему вопрос. Этот сервис отвечает текстом вашего помощника из Timeweb Cloud.
+Алиса открывает навык и задаёт ему вопрос. Этот сервис принимает webhook Диалогов и отвечает текстом вашей языковой модели.
 
-Помощник в коде не зашит. Адрес и ключ лежат в настройках: другая модель ставится двумя строками и перезапуском, без правки программы.
+Помощник в коде не зашит. Адрес и ключ лежат в настройках: другая модель ставится переменными окружения и перезапуском, без правки программы.
 
 | | |
 |---|---|
@@ -14,30 +14,162 @@
 
 Протокол навыка: [Яндекс Диалоги](https://yandex.ru/dev/dialogs/alice/doc/ru/).
 
-## Настроить с агентом
+## Оглавление
 
-В `.agents/skills/` лежат скилы Timeweb. Ими любой агент в Cursor, Codex и т.п. поднимает контур:
+1. [Как это устроено](#как-это-устроено)
+2. [Запуск у себя](#запуск-у-себя)
+3. [Навык в Яндекс Диалогах](#навык-в-яндекс-диалогах)
+4. [Куда смотреть в коде](#куда-смотреть-в-коде)
+5. [Другой провайдер](#другой-провайдер)
+6. [Деплой в Timeweb Cloud](#деплой-в-timeweb-cloud)
+7. [Промпт для агента: поднять весь контур в Timeweb](#промпт-для-агента-поднять-весь-контур-в-timeweb)
 
-1. AI-агент в Timeweb Cloud (`$timeweb-ai`)
-2. backend-приложение в Timeweb Apps из Dockerfile этого репозитория (`$timeweb-apps`)
-3. привязку домена к Apps
+## Как это устроено
 
-Перед платным шагом агент показывает цену и ждёт подтверждения. Ключ доступа к аккаунту Timeweb хранится только локально и в репозиторий не коммитится.
+```text
+Яндекс Диалоги  --POST /alice-->  этот сервис (FastAPI)  -->  языковая модель
+                  webhook навыка      ответ текстом          (OpenAI-совместимый API
+                                                             или свой адаптер)
+```
 
-Как это устроено по факту:
+1. Диалоги шлют на `POST /alice` JSON запроса навыка.
+2. Шлюз разбирает реплику, при необходимости держит короткий диалог в памяти процесса и вызывает модель.
+3. Ответ укладывается в формат Диалогов. Если модель не успела за бюджет времени — «Думаю…», ответ дочитывается, пользователь говорит «дальше».
+4. `GET /health` нужен хостингу: платформа видит, что процесс жив.
+
+Характер помощника задаётся его system prompt (у провайдера) и опционально коротким `SYSTEM_PROMPT` шлюза. Температуру и лимит длины шлюз в запрос по умолчанию не кладёт — это настройки модели на стороне провайдера.
+
+## Запуск у себя
+
+Нужны [uv](https://docs.astral.sh/uv/) и Python 3.13.
+
+```bash
+uv python pin 3.13
+uv sync
+cp example.env .env
+```
+
+В `.env` укажите ключ и адрес API помощника (см. `example.env`) и запустите:
+
+```bash
+uv run alice-gateway
+```
+
+Проверка:
+
+```bash
+curl -s http://127.0.0.1:8080/health
+curl -s http://127.0.0.1:8080/alice \
+  -H 'content-type: application/json' \
+  -d '{"version":"1.0","session":{"session_id":"local","new":true,"message_id":0,"skill_id":"dev"},"request":{"type":"SimpleUtterance","command":"","original_utterance":""}}'
+```
+
+Пустые ключ и адрес не мешают запуску: сервис ответит, что помощник не настроен.
+
+Тесты: `uv run pytest`.
+
+`ALICE_REPLY_BUDGET_SECONDS` лучше не опускать ниже 3. В лимит 4,5 секунды входит ещё дорога до Диалогов и обратно.
+
+## Навык в Яндекс Диалогах
+
+1. Откройте [консоль разработчика](https://dialogs.yandex.ru/developer) и создайте навык.
+2. В настройках, блок Backend, вставьте Webhook URL: `https://<ваш-публичный-хост>/alice`.
+3. Сохраните и проверьте на вкладке «Тестирование».
+
+Формат обмена: [запрос](https://yandex.ru/dev/dialogs/alice/doc/ru/request), [ответ](https://yandex.ru/dev/dialogs/alice/doc/ru/response), [долгий ответ](https://yandex.ru/dev/dialogs/alice/doc/ru/wait-response). Если Алиса говорит, что навык не отвечает, помощник не уложился в 4,5 секунды. Скажите «дальше».
+
+## Куда смотреть в коде
+
+- `POST /alice` — webhook Диалогов.
+- `GET /health` — проверка живости.
+- Вопрос обрабатывает команда `ReplyToUtterance` через `python-cqrs`.
+- К модели ходит порт `LanguageModel`. Пока ключ и адрес пустые, отвечает заглушка.
+- Корневой `Dockerfile` собирает контейнер на порту `8080` (нужен `curl` для health-проб на многих платформах). Свою инструкцию `HEALTHCHECK` в Dockerfile лучше не ставить, если хостинг сам дергает `/health`.
+
+## Другой провайдер
+
+Навык Алисы не меняется. Меняется только кусок, который ходит в языковую модель.
+
+Если у провайдера обычный адрес в стиле OpenAI (`/v1/chat/completions`), отдельный код часто не нужен: в переменные кладут его ключ, корень API (без хвоста `/chat/completions`) и имя модели. Имя модели в запросе читают прямые API; у части «агентских» endpoint’ов модель уже выбрана в панели и поле в запросе игнорируется.
+
+Если API другое, в инфраструктуре заводят свой адаптер.
+
+1. Порт уже есть: `LanguageModel` в `src/alice_gateway/service/ports/language_model.py`. Метод `complete` принимает список сообщений и возвращает текст.
+2. Рядом с текущим адаптером в `src/alice_gateway/infrastructure/adapters/language_model.py` добавьте класс и унаследуйте `LanguageModel`. В `complete` вызовите API и верните текст. Ошибку сети оберните в `LanguageModelError`.
+3. Подключите класс в `build_language_model` в `src/alice_gateway/presentation/wiring/container.py`.
+4. Ключ и адрес читайте из `src/alice_gateway/shared/settings.py`. В репозиторий их не кладите.
+
+Вебхук `/alice`, обработчик диалога и лимит 4,5 секунды трогать не надо: они говорят с портом, а не с конкретным провайдером.
+
+Промпт для модели (добавить адаптер):
+
+```text
+This repo is an Alice skill webhook. It calls a language model through the
+LanguageModel port in src/alice_gateway/service/ports/language_model.py.
+complete() takes a list of chat messages and returns assistant text.
+
+The current adapter is TimewebLanguageModel in
+src/alice_gateway/infrastructure/adapters/language_model.py.
+build_language_model in src/alice_gateway/presentation/wiring/container.py
+picks the adapter. Settings live in src/alice_gateway/shared/settings.py.
+
+Add an adapter for the direct <provider, for example OpenAI> API.
+Subclass LanguageModel, put the class next to TimewebLanguageModel,
+wire it in build_language_model, and add environment variables for the API key,
+base URL, and model name. Do not log the key.
+Do not change the /alice webhook, the ReplyToUtterance handler, or the Alice
+response shape. Cover the adapter with an HTTP mock test, the same way the
+Timeweb adapter is already tested.
+```
+
+## Деплой в Timeweb Cloud
+
+Дальше — конкретная схема на Timeweb: AI-агент как модель, backend в Timeweb Apps из Dockerfile этого репозитория, домен. В `.agents/skills/` лежат скилы (`$timeweb-ai`, `$timeweb-apps`, `$timeweb-domains`): ими агент в Cursor/Codex поднимает контур. Перед платным шагом он показывает цену и ждёт подтверждения. Ключ аккаунта Timeweb хранится только локально и в git не коммитится.
 
 ```text
 Яндекс Диалоги  --POST /alice-->  FastAPI в Timeweb Apps  -->  AI-агент Timeweb
                                    (этот репозиторий)         (модель + промпт)
 ```
 
-1. **AI-агент.** Через `$timeweb-ai` создаётся агент с быстрой моделью (у нас DeepSeek Flash): короткий ответ, без лишнего thinking, потому что Диалоги рвут навык через 4,5 секунды. Новый агент — pay-as-you-go, пакет токенов при создании не покупается. Access id идёт в `TIMEWEB_BASE_URL`. Ключ доступа API показывает один раз в карточке агента — его нужно сохранить и потом положить в `TIMEWEB_API_KEY` у Apps.
-2. **Apps (API, не сайт).** Через `$timeweb-apps` поднимается отдельный backend из Dockerfile: язык Docker, пустые build/run, порт `8080`, health check `GET /health`. Это HTTP API шлюза: `POST /alice` принимает webhook Диалогов, `GET /health` — проверка живости. При создании задаются `TIMEWEB_BASE_URL`, `TIMEWEB_MODEL`, `SYSTEM_PROMPT`. Ключ агента (`TIMEWEB_API_KEY`) дописывается в переменные приложения после того, как его скопировали из карточки агента.
-3. **Домен.** Купить домен нужно руками в [панели Timeweb](https://timeweb.cloud). Привязать купленный домен к Apps можно через скилы: платформа сама ставит A-запись на IP приложения и выпускает сертификат. В Яндекс Диалогах Webhook URL: `https://<ваш-домен>/alice`. Пока зона в реестре не опубликована, домен снаружи не откроется — до этого можно временно указать технический домен Apps.
+### AI-агент
 
-Сменить AI-агента: новый access id и ключ в тех же двух переменных Apps, код шлюза не меняется.
+В [панели Timeweb](https://timeweb.cloud) создайте AI-агента и выберите быструю модель (удобно для голоса, у нас DeepSeek Flash): короткий ответ, без лишнего thinking — Диалоги рвут навык через 4,5 секунды. Новый агент — pay-as-you-go. Характер задаётся промптом в панели.
 
-### Промпт для агента: поднять весь контур в Timeweb
+Из карточки агента, раздел API:
+
+- **access id** из адреса API;
+- **ключ доступа**. Его показывают один раз. Это не ключ всего аккаунта и не ключ AI Gateway (`https://api.timeweb.ai/v1` — другой продукт).
+
+```env
+TIMEWEB_API_KEY=<ключ доступа агента>
+TIMEWEB_BASE_URL=https://agent.timeweb.cloud/api/v1/cloud-ai/agents/<access-id>/v1
+TIMEWEB_MODEL=deepseek-v4-flash
+```
+
+`TIMEWEB_BASE_URL` — без хвоста `/chat/completions`. Имя в `TIMEWEB_MODEL` агент Timeweb не читает: отвечает модель из панели. Поле нужно, когда тот же шлюз смотрит в обычный OpenAI-совместимый API.
+
+`SYSTEM_PROMPT` шлюз добавляет к каждому вопросу; промпт агента в панели он не заменяет.
+
+Смена агента: новый access id и ключ в тех же двух переменных, перезапуск. Документация: [OpenAI-совместимый API агентов](https://timeweb.cloud/docs/ai-agents/api-usage/openai-compatible-api).
+
+### Backend в Timeweb Apps
+
+Это HTTP API шлюза, не сайт. Собирается из Dockerfile. То же через скил `$timeweb-apps`.
+
+1. Apps → создать → backend, репозиторий и ветка с этим Dockerfile.
+2. Язык **Docker**, пустые build/run, порт из `EXPOSE 8080`.
+3. Health check: `GET /health` → `{"status":"ok"}`. В образе есть `curl`.
+4. Переменные: `TIMEWEB_API_KEY`, `TIMEWEB_BASE_URL`, по желанию `SYSTEM_PROMPT`, `TIMEWEB_MODEL`, `ALICE_REPLY_BUDGET_SECONDS`.
+5. Плата — тариф в месяц плюс публичный IP. Удалить приложение через API нельзя.
+6. Домен: купить в панели руками, привязать к Apps (скилы или карточка). Сертификат выпускает Timeweb. Пока зона не опубликована — технический домен Apps: `https://<технический-домен>/alice`.
+
+### Навык
+
+В Диалогах Webhook URL: `https://<ваш-домен>/alice` (или технический домен Apps, пока DNS не готов).
+
+Готовый текст для копирования в агента — ниже.
+
+## Промпт для агента: поднять весь контур в Timeweb
 
 Ниже готовый текст **на английском** — его копируют в Cursor/Codex и т.п. Агент должен сначала прочитать скилы `$timeweb-ai`, `$timeweb-apps`, `$timeweb-domains`, следовать `AGENTS.md`, перед платным шагом назвать цену и ждать подтверждения, секреты в git не коммитить.
 
@@ -123,124 +255,4 @@ Use Timeweb MCP via skills ($timeweb-ai, $timeweb-apps, $timeweb-domains, $timew
 7) Swapping the LLM later
    - New Timeweb agent or OpenAI-compatible provider: change TIMEWEB_BASE_URL + TIMEWEB_API_KEY only,
      or add a new LanguageModel adapter per README "Another provider" section.
-```
-
-## Запуск у себя
-
-Нужны [uv](https://docs.astral.sh/uv/) и Python 3.13.
-
-```bash
-uv python pin 3.13
-uv sync
-cp example.env .env
-```
-
-В `.env` впишите помощника, как в следующем разделе, и запустите:
-
-```bash
-uv run alice-gateway
-```
-
-Проверка:
-
-```bash
-curl -s http://127.0.0.1:8080/health
-curl -s http://127.0.0.1:8080/alice \
-  -H 'content-type: application/json' \
-  -d '{"version":"1.0","session":{"session_id":"local","new":true,"message_id":0,"skill_id":"dev"},"request":{"type":"SimpleUtterance","command":"","original_utterance":""}}'
-```
-
-Пустые ключ и адрес не мешают запуску: сервис ответит, что помощник не настроен.
-
-Тесты: `uv run pytest`.
-
-## Какого помощника звать
-
-В [панели Timeweb](https://timeweb.cloud) создайте AI-агента и выберите модель. Характер задаётся промптом в панели и переживает обновление кода. Деньги списываются с баланса по мере запросов.
-
-Из карточки агента, раздел API, нужны две вещи:
-
-- **access id** из адреса API;
-- **ключ доступа**. Его показывают один раз. Потеряли — выпустите новый там же. Это не ключ всего аккаунта и не ключ AI Gateway: `https://api.timeweb.ai/v1` это другой продукт.
-
-```env
-TIMEWEB_API_KEY=<ключ доступа агента>
-TIMEWEB_BASE_URL=https://agent.timeweb.cloud/api/v1/cloud-ai/agents/<access-id>/v1
-TIMEWEB_MODEL=deepseek-v4-flash
-```
-
-`TIMEWEB_BASE_URL` пишется без хвоста `/chat/completions`. Имя в `TIMEWEB_MODEL` агент Timeweb не читает: отвечает модель, выбранная в панели. Поле нужно, когда тот же шлюз смотрит в обычный адрес в стиле OpenAI и модель выбирают запросом.
-
-`SYSTEM_PROMPT` шлюз добавляет к каждому вопросу: короткий разговорный ответ без разметки. Промпт агента в панели он не заменяет.
-
-Температуру и лимит длины шлюз в запрос не кладёт. У части моделей GPT-5 такие поля ломают вызов, у остальных это настраивается в панели. Поэтому смена агента не требует правки кода.
-
-Как устроен вызов: [OpenAI-совместимый API агентов](https://timeweb.cloud/docs/ai-agents/api-usage/openai-compatible-api).
-
-Другой агент Timeweb ставится так: его access id в `TIMEWEB_BASE_URL`, его ключ в `TIMEWEB_API_KEY`, сохранить и перезапустить.
-
-## Backend в Timeweb Apps
-
-Это HTTP API шлюза, не фронтенд. Собирается из Dockerfile в корне репозитория. То же самое делает скил `$timeweb-apps`.
-
-1. Apps → создать → backend.
-2. Подключите репозиторий и ветку с этим Dockerfile.
-3. Язык **Docker**. Команды сборки и запуска оставьте пустыми: процесс задаёт Dockerfile, порт берётся из `EXPOSE 8080`.
-4. Сервис слушает `0.0.0.0:8080`. Снаружи Timeweb отдаёт его по HTTPS.
-5. Проверка живости: `GET /health`, ответ `{"status":"ok"}`. Свою инструкцию `HEALTHCHECK` в Dockerfile не ставьте: она перебьёт проверку панели. В образе есть `curl`, без него проверка внутри контейнера не проходит.
-6. Переменные: `TIMEWEB_API_KEY`, `TIMEWEB_BASE_URL`, по желанию `SYSTEM_PROMPT`, `TIMEWEB_MODEL`, `ALICE_REPLY_BUDGET_SECONDS`. Их можно задать при создании, позже их меняют в панели. Обратно из API значения не читаются.
-7. Плата — тариф в месяц плюс отдельный публичный IP. Удалить приложение через API нельзя: пока оно в панели, за него начисляют. Пауза не обещает, что начисления остановятся.
-8. Домен: купить в панели руками, привязать к Apps через скилы или в карточке приложения. Сертификат выпускает Timeweb, свой поставить нельзя. Пока зона не опубликована, временно используйте технический домен Apps: `https://<технический-домен>/alice`.
-
-`ALICE_REPLY_BUDGET_SECONDS` лучше не опускать ниже 3. В лимит 4,5 секунды входит ещё дорога до Диалогов и обратно.
-
-## Навык в Яндекс Диалогах
-
-1. Откройте [консоль разработчика](https://dialogs.yandex.ru/developer) и создайте навык.
-2. В настройках, блок Backend, вставьте Webhook URL: `https://<домен>/alice`.
-3. Сохраните и проверьте на вкладке «Тестирование».
-
-Формат обмена: [запрос](https://yandex.ru/dev/dialogs/alice/doc/ru/request), [ответ](https://yandex.ru/dev/dialogs/alice/doc/ru/response), [долгий ответ](https://yandex.ru/dev/dialogs/alice/doc/ru/wait-response). Если Алиса говорит, что навык не отвечает, помощник не уложился в 4,5 секунды. Скажите «дальше».
-
-## Куда смотреть в коде
-
-- `POST /alice` принимает сообщения Диалогов.
-- `GET /health` нужен, чтобы платформа видела живое приложение.
-- Вопрос обрабатывает команда `ReplyToUtterance` через `python-cqrs`.
-- К помощнику ходит `TimewebLanguageModel`. Пока ключ и адрес пустые, вместо него отвечает заглушка.
-
-## Другой провайдер вместо Timeweb
-
-Навык Алисы при этом не меняется. Меняется только тот кусок, который ходит в языковую модель.
-
-Если у провайдера обычный адрес в стиле OpenAI (`/v1/chat/completions`), отдельный код не нужен. В `TIMEWEB_BASE_URL` поставьте его адрес, в `TIMEWEB_MODEL` имя модели, в `TIMEWEB_API_KEY` его ключ. У агента Timeweb имя модели из запроса не читается. У прямого API OpenAI и похожих сервисов читается, поэтому модель выбирает `TIMEWEB_MODEL`.
-
-Если API другое, в инфраструктуре заводят свой адаптер.
-
-1. Порт уже есть: `LanguageModel` в `src/alice_gateway/service/ports/language_model.py`. Метод `complete` принимает список сообщений и возвращает текст.
-2. Рядом с `TimewebLanguageModel` в `src/alice_gateway/infrastructure/adapters/language_model.py` добавьте класс и унаследуйте `LanguageModel`. В `complete` вызовите API и верните текст. Ошибку сети оберните в `LanguageModelError`.
-3. Подключите класс в `build_language_model` в `src/alice_gateway/presentation/wiring/container.py`. Сейчас там выбор: есть ключ и адрес Timeweb — берётся `TimewebLanguageModel`, иначе заглушка.
-4. Ключ и адрес читайте из `src/alice_gateway/shared/settings.py`, как `TIMEWEB_API_KEY` и `TIMEWEB_BASE_URL`. В репозиторий их не кладите.
-
-Вебхук `/alice`, обработчик диалога и лимит 4,5 секунды трогать не надо: они говорят с портом, а не с Timeweb.
-
-Промпт для модели:
-
-```text
-This repo is an Alice skill webhook. It calls a language model through the
-LanguageModel port in src/alice_gateway/service/ports/language_model.py.
-complete() takes a list of chat messages and returns assistant text.
-
-The current adapter is TimewebLanguageModel in
-src/alice_gateway/infrastructure/adapters/language_model.py.
-build_language_model in src/alice_gateway/presentation/wiring/container.py
-picks the adapter. Settings live in src/alice_gateway/shared/settings.py.
-
-Add an adapter for the direct <provider, for example OpenAI> API.
-Subclass LanguageModel, put the class next to TimewebLanguageModel,
-wire it in build_language_model, and add environment variables for the API key,
-base URL, and model name. Do not log the key.
-Do not change the /alice webhook, the ReplyToUtterance handler, or the Alice
-response shape. Cover the adapter with an HTTP mock test, the same way the
-Timeweb adapter is already tested.
 ```
