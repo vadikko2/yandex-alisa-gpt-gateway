@@ -15,6 +15,13 @@ from alice_gateway.shared.settings import load_settings
 logger = logging.getLogger(__name__)
 
 
+class _SkipHealthAccessLog(logging.Filter):
+    """Drop uvicorn access lines for GET /health so probes do not drown real traffic."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/health" not in record.getMessage()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     container = build_container()
@@ -52,5 +59,6 @@ def create_app() -> FastAPI:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
+    logging.getLogger("uvicorn.access").addFilter(_SkipHealthAccessLog())
     settings = load_settings()
     uvicorn.run(create_app(), host=settings.host, port=settings.port)

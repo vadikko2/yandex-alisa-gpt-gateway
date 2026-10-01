@@ -222,3 +222,5 @@ __marimo__/
 
 # graphify
 graphify-out/
+
+tmp/
