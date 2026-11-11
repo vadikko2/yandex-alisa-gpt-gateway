@@ -37,6 +37,16 @@ def _token(value: object) -> str:
     return text[:80]
 
 
+def _utterance(text: str) -> str:
+    collapsed = " ".join(text.split())
+    if not collapsed:
+        return "-"
+    if len(collapsed) > 500:
+        collapsed = collapsed[:500] + "…"
+    escaped = collapsed.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def _caller(body: dict[str, Any]) -> tuple[str, str]:
     session = body.get("session") if isinstance(body.get("session"), dict) else {}
     user = session.get("user") if isinstance(session.get("user"), dict) else {}
@@ -86,12 +96,13 @@ def create_app() -> FastAPI:
         result = await request.app.state.mediator.send(command)
         user_id, application_id = _caller(payload)
         logger.info(
-            "POST /alice 200 ms=%s user=%s app=%s ip=%s session=%s",
+            "POST /alice 200 ms=%s user=%s app=%s ip=%s session=%s text=%s",
             int((time.perf_counter() - started) * 1000),
             user_id,
             application_id,
             _client_ip(request),
             command.session_id,
+            _utterance(command.utterance),
         )
         return alice_response(result)
 

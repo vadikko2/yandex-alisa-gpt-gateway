@@ -231,7 +231,11 @@ def test_successful_alice_hit_logs_caller_and_address(
             "user": {"user_id": "user-1"},
             "application": {"application_id": "app-1"},
         },
-        "request": {"type": "SimpleUtterance", "command": "", "original_utterance": ""},
+        "request": {
+            "type": "SimpleUtterance",
+            "command": "какая погода",
+            "original_utterance": "какая погода\nсейчас",
+        },
     }
     with caplog.at_level(logging.INFO, logger="alice_gateway.presentation.main"):
         with TestClient(create_app()) as client:
@@ -252,3 +256,4 @@ def test_successful_alice_hit_logs_caller_and_address(
     assert "ip=203.0.113.9" in message
     assert "session=web" in message
     assert "ms=" in message
+    assert 'text="какая погода сейчас"' in message
