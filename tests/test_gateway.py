@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 import httpx
 import pytest
@@ -13,7 +14,7 @@ from alice_gateway.infrastructure.adapters.language_model import (
     normalize_openai_compatible_root,
 )
 from alice_gateway.infrastructure.dialogs import DialogStore
-from alice_gateway.presentation.main import create_app
+from alice_gateway.presentation.main import configure_logging, create_app
 from alice_gateway.presentation.protocol import alice_response, command_from_body
 from alice_gateway.service.handlers.commands.reply import (
     WELCOME_TEXT,
@@ -204,3 +205,50 @@ def test_system_prompt_is_loaded_from_markdown_file(tmp_path, monkeypatch: pytes
     settings = load_settings(base_dir=tmp_path)
     assert settings.system_prompt == "Кастомный system prompt"
     assert "Кастомный" in read_system_prompt(prompt_file)
+
+
+def test_configure_logging_quiets_http_client_and_stamps_time() -> None:
+    configure_logging()
+    assert logging.getLogger("httpx").level == logging.WARNING
+    assert logging.getLogger("httpcore").level == logging.WARNING
+    record = logging.LogRecord("alice", logging.INFO, __file__, 1, "POST /alice 200", (), None)
+    rendered = logging.getLogger().handlers[0].format(record)
+    assert rendered.endswith("INFO POST /alice 200")
+    assert rendered[:4].isdigit()
+
+
+def test_successful_alice_hit_logs_caller_and_address(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("TIMEWEB_API_KEY", "")
+    monkeypatch.setenv("TIMEWEB_BASE_URL", "")
+    payload = {
+        "version": "1.0",
+        "session": {
+            "session_id": "web",
+            "new": True,
+            "user": {"user_id": "user-1"},
+            "application": {"application_id": "app-1"},
+        },
+        "request": {"type": "SimpleUtterance", "command": "", "original_utterance": ""},
+    }
+    with caplog.at_level(logging.INFO, logger="alice_gateway.presentation.main"):
+        with TestClient(create_app()) as client:
+            health = client.get("/health")
+            welcome = client.post(
+                "/alice",
+                json=payload,
+                headers={"x-forwarded-for": "203.0.113.9, 10.0.0.2"},
+            )
+    assert health.status_code == 200
+    assert welcome.status_code == 200
+    hits = [record.getMessage() for record in caplog.records if record.name == "alice_gateway.presentation.main"]
+    assert len(hits) == 1
+    message = hits[0]
+    assert message.startswith("POST /alice 200 ")
+    assert "user=user-1" in message
+    assert "app=app-1" in message
+    assert "ip=203.0.113.9" in message
+    assert "session=web" in message
+    assert "ms=" in message

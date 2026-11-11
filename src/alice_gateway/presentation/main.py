@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -14,12 +15,48 @@ from alice_gateway.shared.settings import load_settings
 
 logger = logging.getLogger(__name__)
 
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
+_LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S%z"
 
-class _SkipHealthAccessLog(logging.Filter):
-    """Drop uvicorn access lines for GET /health so probes do not drown real traffic."""
 
-    def filter(self, record: logging.LogRecord) -> bool:
-        return "/health" not in record.getMessage()
+def configure_logging() -> None:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT))
+    root = logging.getLogger()
+    root.handlers[:] = [handler]
+    root.setLevel(logging.INFO)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+def _token(value: object) -> str:
+    text = value if isinstance(value, str) else ""
+    text = " ".join(text.split())
+    if not text:
+        return "-"
+    return text[:80]
+
+
+def _caller(body: dict[str, Any]) -> tuple[str, str]:
+    session = body.get("session") if isinstance(body.get("session"), dict) else {}
+    user = session.get("user") if isinstance(session.get("user"), dict) else {}
+    application = session.get("application") if isinstance(session.get("application"), dict) else {}
+    user_id = user.get("user_id") or session.get("user_id")
+    return _token(user_id), _token(application.get("application_id"))
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        first = forwarded.split(",", 1)[0].strip()
+        if first:
+            return _token(first)
+    real_ip = request.headers.get("x-real-ip", "").strip()
+    if real_ip:
+        return _token(real_ip)
+    if request.client is not None and request.client.host:
+        return _token(request.client.host)
+    return "-"
 
 
 @asynccontextmanager
@@ -42,15 +79,19 @@ def create_app() -> FastAPI:
 
     @app.post("/alice")
     async def alice(request: Request) -> dict[str, Any]:
+        started = time.perf_counter()
         body = await request.json()
-        command = command_from_body(body if isinstance(body, dict) else {})
+        payload = body if isinstance(body, dict) else {}
+        command = command_from_body(payload)
         result = await request.app.state.mediator.send(command)
+        user_id, application_id = _caller(payload)
         logger.info(
-            "alice session=%s new=%s type=%s chars=%s",
+            "POST /alice 200 ms=%s user=%s app=%s ip=%s session=%s",
+            int((time.perf_counter() - started) * 1000),
+            user_id,
+            application_id,
+            _client_ip(request),
             command.session_id,
-            command.session_new,
-            command.request_type,
-            len(command.utterance),
         )
         return alice_response(result)
 
@@ -58,7 +99,6 @@ def create_app() -> FastAPI:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
-    logging.getLogger("uvicorn.access").addFilter(_SkipHealthAccessLog())
+    configure_logging()
     settings = load_settings()
-    uvicorn.run(create_app(), host=settings.host, port=settings.port)
+    uvicorn.run(create_app(), host=settings.host, port=settings.port, access_log=False)
