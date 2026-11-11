@@ -27,6 +27,8 @@ def configure_logging() -> None:
     root.setLevel(logging.INFO)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+    # python-cqrs sets this logger to DEBUG on import.
+    logging.getLogger("cqrs").setLevel(logging.NOTSET)
 
 
 def _token(value: object) -> str:

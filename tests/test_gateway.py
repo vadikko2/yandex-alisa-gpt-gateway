@@ -208,9 +208,12 @@ def test_system_prompt_is_loaded_from_markdown_file(tmp_path, monkeypatch: pytes
 
 
 def test_configure_logging_quiets_http_client_and_stamps_time() -> None:
+    logging.getLogger("cqrs").setLevel(logging.DEBUG)
     configure_logging()
     assert logging.getLogger("httpx").level == logging.WARNING
     assert logging.getLogger("httpcore").level == logging.WARNING
+    assert logging.getLogger("cqrs").level == logging.NOTSET
+    assert not logging.getLogger("cqrs").isEnabledFor(logging.DEBUG)
     record = logging.LogRecord("alice", logging.INFO, __file__, 1, "POST /alice 200", (), None)
     rendered = logging.getLogger().handlers[0].format(record)
     assert rendered.endswith("INFO POST /alice 200")
