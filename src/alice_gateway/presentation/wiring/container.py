@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import cqrs
+from cqrs.bootstrap import requests as bootstrap
 from cqrs.container.dependency_injector import DependencyInjectorCQRSContainer
-from cqrs.requests.map import RequestMap
 from dependency_injector import containers, providers
 
 from alice_gateway.infrastructure.adapters.language_model import StubLanguageModel, TimewebLanguageModel
@@ -22,10 +22,8 @@ def build_language_model(settings: Settings) -> StubLanguageModel | TimewebLangu
     return StubLanguageModel()
 
 
-def build_request_map() -> RequestMap:
-    request_map = RequestMap()
-    request_map.bind(ReplyToUtteranceCommand, ReplyToUtteranceCommandHandler)
-    return request_map
+def commands_mapper(mapper: cqrs.RequestMap) -> None:
+    mapper.bind(ReplyToUtteranceCommand, ReplyToUtteranceCommandHandler)
 
 
 class Container(containers.DeclarativeContainer):
@@ -43,7 +41,7 @@ class Container(containers.DeclarativeContainer):
 def build_mediator(container: Container) -> cqrs.RequestMediator:
     cqrs_container = DependencyInjectorCQRSContainer()
     cqrs_container.attach_external_container(container)
-    return cqrs.RequestMediator(request_map=build_request_map(), container=cqrs_container)
+    return bootstrap.bootstrap(di_container=cqrs_container, commands_mapper=commands_mapper)
 
 
 def build_container() -> Container:

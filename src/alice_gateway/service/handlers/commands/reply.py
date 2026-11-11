@@ -66,15 +66,13 @@ def _normalize(text: str) -> str:
     return text.strip().lower().rstrip(".!?…")
 
 
-class ReplyToUtteranceCommandHandler(
-    cqrs.RequestHandler[ReplyToUtteranceCommand, ReplyToUtteranceResult],
-):
+class ReplyToUtteranceCommandHandler(cqrs.RequestHandler[ReplyToUtteranceCommand]):
     def __init__(self, language_model: LanguageModel, dialogs: DialogStore, settings: Settings) -> None:
         self._language_model = language_model
         self._dialogs = dialogs
         self._settings = settings
 
-    async def handle(self, request: ReplyToUtteranceCommand) -> ReplyToUtteranceResult:
+    async def handle(self, request: ReplyToUtteranceCommand):
         if request.session_new:
             self._dialogs.reset(request.session_id)
         dialog = self._dialogs.get(request.session_id)

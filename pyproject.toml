@@ -18,7 +18,7 @@ dependencies = [
   "fastapi>=0.135.0",
   "httpx>=0.28.1",
   "pydantic-settings>=2.11.0",
-  "python-cqrs>=4.13.0,<5",
+  "python-cqrs[dependency-injector]>=5.6.0,<6",
   "uvicorn>=0.41.0",
 ]
 description = "Yandex Alice webhook gateway to a swappable OpenAI-compatible agent"
