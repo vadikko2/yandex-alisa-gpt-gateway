@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 
@@ -14,7 +15,7 @@ from alice_gateway.infrastructure.adapters.language_model import (
     normalize_openai_compatible_root,
 )
 from alice_gateway.infrastructure.dialogs import DialogStore
-from alice_gateway.presentation.main import configure_logging, create_app
+from alice_gateway.presentation.main import configure_logging, create_app, yandex_networks
 from alice_gateway.presentation.protocol import alice_response, command_from_body
 from alice_gateway.service.handlers.commands.reply import (
     WELCOME_TEXT,
@@ -55,6 +56,9 @@ def _skip_live_yandex_ip_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
         return None
 
     monkeypatch.setattr("alice_gateway.presentation.main._refresh_yandex_ips", refresh)
+    yandex_networks[:] = [ipaddress.ip_network("203.0.113.0/24")]
+    yield
+    yandex_networks.clear()
 
 
 def _handler(model: ScriptedLanguageModel, settings: Settings | None = None) -> ReplyToUtteranceCommandHandler:
@@ -193,6 +197,7 @@ def test_health_and_welcome_over_http(monkeypatch: pytest.MonkeyPatch) -> None:
         assert health.json() == {"status": "ok"}
         welcome = client.post(
             "/alice",
+            headers={"x-forwarded-for": "203.0.113.9"},
             json={
                 "version": "1.0",
                 "session": {"session_id": "web", "new": True, "message_id": 0, "skill_id": "skill"},
@@ -268,3 +273,21 @@ def test_successful_alice_hit_logs_caller_and_address(
     assert "session=web" in message
     assert "ms=" in message
     assert 'text="какая погода сейчас"' in message
+
+
+def test_alice_rejects_address_outside_yandex(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TIMEWEB_API_KEY", "")
+    monkeypatch.setenv("TIMEWEB_BASE_URL", "")
+    with TestClient(create_app()) as client:
+        denied = client.post(
+            "/alice",
+            headers={"x-forwarded-for": "198.51.100.4"},
+            json={"session": {"session_id": "x", "new": True}, "request": {}},
+        )
+        health = client.get("/health")
+    assert denied.status_code == 200
+    assert denied.json() == {
+        "response": {"text": "Запрос должен быть с адресов Яндекса.", "end_session": True},
+        "version": "1.0",
+    }
+    assert health.status_code == 200

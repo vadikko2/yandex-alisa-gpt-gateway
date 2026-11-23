@@ -15,6 +15,7 @@ from fastapi import FastAPI, Request
 
 from alice_gateway.presentation.protocol import alice_response, command_from_body
 from alice_gateway.presentation.wiring.container import build_container, build_mediator
+from alice_gateway.service.models.commands.reply import ReplyToUtteranceResult
 from alice_gateway.shared.settings import load_settings
 
 logger = logging.getLogger(__name__)
@@ -74,7 +75,7 @@ async def _refresh_yandex_ips() -> None:
                 logger.info("yandex ips cached networks=%s", len(found))
         except Exception:
             logger.warning("yandex ips refresh failed", exc_info=True)
-        await asyncio.sleep(86400)
+        await asyncio.sleep(86400 if yandex_networks else 60)
 
 
 def _client_ip(request: Request) -> str:
@@ -89,6 +90,14 @@ def _client_ip(request: Request) -> str:
     if request.client is not None and request.client.host:
         return _token(request.client.host)
     return "-"
+
+
+def _from_yandex(request: Request) -> bool:
+    try:
+        address = ipaddress.ip_address(_client_ip(request))
+    except ValueError:
+        return False
+    return any(address in network for network in yandex_networks)
 
 
 @asynccontextmanager
@@ -117,6 +126,14 @@ def create_app() -> FastAPI:
 
     @app.post("/alice")
     async def alice(request: Request) -> dict[str, Any]:
+        if not _from_yandex(request):
+            logger.info("POST /alice 200 ip=%s denied", _client_ip(request))
+            return alice_response(
+                ReplyToUtteranceResult(
+                    text="Запрос должен быть с адресов Яндекса.",
+                    end_session=True,
+                ),
+            )
         started = time.perf_counter()
         body = await request.json()
         payload = body if isinstance(body, dict) else {}
