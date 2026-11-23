@@ -95,7 +95,7 @@ def test_message_body_omits_sampling_params() -> None:
     assert "tools" not in body
 
 
-def test_deepseek_request_searches_without_thinking() -> None:
+def test_deepseek_request_searches_while_thinking() -> None:
     assert deepseek_web_search("https://api.deepseek.com")
     assert deepseek_web_search("https://api.deepseek.com/v1/chat/completions")
     assert not deepseek_web_search("https://api.example/v1")
@@ -104,7 +104,7 @@ def test_deepseek_request_searches_without_thinking() -> None:
         messages=[{"role": "user", "content": "погода"}],
         web_search=True,
     )
-    assert body["thinking"] == {"type": "disabled"}
+    assert body["thinking"] == {"type": "enabled"}
     assert body["tools"] == [{"type": "deepseek_web_search"}]
 
 
@@ -131,7 +131,7 @@ async def test_openai_compatible_client_posts_bearer_and_reads_content() -> None
     assert text == "готово"
     assert seen["auth"] == "Bearer secret"
     assert seen["body"]["model"] == "deepseek-flash"
-    assert seen["body"]["thinking"] == {"type": "disabled"}
+    assert seen["body"]["thinking"] == {"type": "enabled"}
     assert seen["body"]["tools"] == [{"type": "deepseek_web_search"}]
     assert seen["body"]["messages"][0]["content"] == "привет"
 

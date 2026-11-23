@@ -36,14 +36,14 @@ def message_body(
     web_search: bool = False,
 ) -> dict[str, Any]:
     # Chat completions for every provider. Sampling stays on the provider.
-    # DeepSeek search runs on their side; thinking stays off so a voice turn can finish.
+    # On DeepSeek, thinking stays on: the model can search, open pages and check facts.
     body: dict[str, Any] = {
         "model": model,
         "stream": False,
         "messages": list(messages),
     }
     if web_search:
-        body["thinking"] = {"type": "disabled"}
+        body["thinking"] = {"type": "enabled"}
         body["tools"] = [{"type": "deepseek_web_search"}]
     return body
 
@@ -92,7 +92,7 @@ class OpenAICompatibleLanguageModel(LanguageModel):
 
     async def _http(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=30.0)
+            self._client = httpx.AsyncClient(timeout=120.0)
         return self._client
 
     async def complete(self, messages: Sequence[ChatMessage]) -> str:
