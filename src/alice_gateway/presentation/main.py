@@ -22,8 +22,29 @@ logger = logging.getLogger(__name__)
 
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 _LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S%z"
-yandex_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
 _CIDR = re.compile(r"(?:\d{1,3}\.){3}\d{1,3}/\d{1,3}|(?:[0-9a-fA-F]{1,4}:){2,}[0-9a-fA-F:]*/\d{1,3}")
+# https://yandex.ru/ips — used until the page is fetched, and if that fetch comes back empty.
+_PUBLISHED_YANDEX_NETWORKS = (
+    "5.45.192.0/18",
+    "5.255.192.0/18",
+    "37.9.64.0/18",
+    "37.140.128.0/18",
+    "77.88.0.0/18",
+    "84.252.160.0/19",
+    "87.250.224.0/19",
+    "90.156.176.0/20",
+    "92.255.112.0/20",
+    "93.158.128.0/18",
+    "95.108.128.0/17",
+    "141.8.128.0/18",
+    "178.154.128.0/18",
+    "185.32.187.0/24",
+    "213.180.192.0/19",
+    "2a02:6b8::/29",
+)
+yandex_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
+    ipaddress.ip_network(network) for network in _PUBLISHED_YANDEX_NETWORKS
+]
 
 
 def configure_logging() -> None:
@@ -68,11 +89,15 @@ async def _refresh_yandex_ips() -> None:
     while True:
         try:
             async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
-                page = (await client.get("https://yandex.ru/ips")).text
+                page = (
+                    await client.get("https://yandex.ru/ips", headers={"user-agent": "Mozilla/5.0"})
+                ).text
             found = list(dict.fromkeys(ipaddress.ip_network(token) for token in _CIDR.findall(page)))
             if found:
                 yandex_networks[:] = found
                 logger.info("yandex ips cached networks=%s", len(found))
+            else:
+                logger.warning("yandex ips page has no networks")
         except Exception:
             logger.warning("yandex ips refresh failed", exc_info=True)
         await asyncio.sleep(86400 if yandex_networks else 60)

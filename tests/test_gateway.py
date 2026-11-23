@@ -15,7 +15,12 @@ from alice_gateway.infrastructure.adapters.language_model import (
     normalize_openai_compatible_root,
 )
 from alice_gateway.infrastructure.dialogs import DialogStore
-from alice_gateway.presentation.main import configure_logging, create_app, yandex_networks
+from alice_gateway.presentation.main import (
+    _PUBLISHED_YANDEX_NETWORKS,
+    configure_logging,
+    create_app,
+    yandex_networks,
+)
 from alice_gateway.presentation.protocol import alice_response, command_from_body
 from alice_gateway.service.handlers.commands.reply import (
     WELCOME_TEXT,
@@ -273,6 +278,12 @@ def test_successful_alice_hit_logs_caller_and_address(
     assert "session=web" in message
     assert "ms=" in message
     assert 'text="какая погода сейчас"' in message
+
+
+def test_published_yandex_ranges_include_dialogs_console() -> None:
+    networks = [ipaddress.ip_network(item) for item in _PUBLISHED_YANDEX_NETWORKS]
+    assert any(ipaddress.ip_address("5.45.207.40") in network for network in networks)
+    assert any(ipaddress.ip_address("5.45.207.48") in network for network in networks)
 
 
 def test_alice_rejects_address_outside_yandex(monkeypatch: pytest.MonkeyPatch) -> None:
