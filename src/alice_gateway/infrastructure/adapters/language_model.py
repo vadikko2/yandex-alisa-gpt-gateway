@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -11,8 +12,9 @@ from alice_gateway.service.ports.language_model import ChatMessage, LanguageMode
 logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
-DEFAULT_MODEL = "deepseek-chat"
+DEFAULT_MODEL = "deepseek-flash"
 _CHAT_COMPLETIONS_SUFFIX = "/chat/completions"
+_DEEPSEEK_HOST = "api.deepseek.com"
 
 
 def normalize_openai_compatible_root(base_url: str) -> str:
@@ -23,13 +25,27 @@ def normalize_openai_compatible_root(base_url: str) -> str:
     return root
 
 
-def message_body(*, model: str, messages: Sequence[ChatMessage]) -> dict[str, Any]:
-    # Same body for every OpenAI-compatible provider. Sampling stays on the provider.
-    return {
+def deepseek_web_search(base_url: str) -> bool:
+    return (urlparse(normalize_openai_compatible_root(base_url)).hostname or "") == _DEEPSEEK_HOST
+
+
+def message_body(
+    *,
+    model: str,
+    messages: Sequence[ChatMessage],
+    web_search: bool = False,
+) -> dict[str, Any]:
+    # Chat completions for every provider. Sampling stays on the provider.
+    # DeepSeek search runs on their side; thinking stays off so a voice turn can finish.
+    body: dict[str, Any] = {
         "model": model,
         "stream": False,
         "messages": list(messages),
     }
+    if web_search:
+        body["thinking"] = {"type": "disabled"}
+        body["tools"] = [{"type": "deepseek_web_search"}]
+    return body
 
 
 class StubLanguageModel(LanguageModel):
@@ -55,6 +71,7 @@ class OpenAICompatibleLanguageModel(LanguageModel):
         if not self._base_url:
             raise ValueError("LLM_BASE_URL is required")
         self._model = model
+        self._web_search = deepseek_web_search(self._base_url)
         self._client = client
         self._owns_client = client is None
 
@@ -84,7 +101,7 @@ class OpenAICompatibleLanguageModel(LanguageModel):
             response = await client.post(
                 self.chat_completions_url,
                 headers=self._headers(),
-                json=message_body(model=self._model, messages=messages),
+                json=message_body(model=self._model, messages=messages, web_search=self._web_search),
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:

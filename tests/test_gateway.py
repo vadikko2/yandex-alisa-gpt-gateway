@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from alice_gateway.infrastructure.adapters.language_model import (
     OpenAICompatibleLanguageModel,
+    deepseek_web_search,
     message_body,
     normalize_openai_compatible_root,
 )
@@ -87,10 +88,24 @@ def test_normalize_openai_compatible_root(raw: str, expected: str) -> None:
 
 
 def test_message_body_omits_sampling_params() -> None:
-    body = message_body(model="deepseek-chat", messages=[{"role": "user", "content": "привет"}])
+    body = message_body(model="deepseek-flash", messages=[{"role": "user", "content": "привет"}])
     assert "temperature" not in body
     assert "max_tokens" not in body
     assert body["stream"] is False
+    assert "tools" not in body
+
+
+def test_deepseek_request_searches_without_thinking() -> None:
+    assert deepseek_web_search("https://api.deepseek.com")
+    assert deepseek_web_search("https://api.deepseek.com/v1/chat/completions")
+    assert not deepseek_web_search("https://api.example/v1")
+    body = message_body(
+        model="deepseek-flash",
+        messages=[{"role": "user", "content": "погода"}],
+        web_search=True,
+    )
+    assert body["thinking"] == {"type": "disabled"}
+    assert body["tools"] == [{"type": "deepseek_web_search"}]
 
 
 def test_chat_completions_url_uses_the_configured_root() -> None:
@@ -110,12 +125,14 @@ async def test_openai_compatible_client_posts_bearer_and_reads_content() -> None
         return httpx.Response(200, json={"choices": [{"message": {"content": "  готово  "}}]})
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    model = OpenAICompatibleLanguageModel(api_key="secret", base_url="https://api.example/v1", client=client)
+    model = OpenAICompatibleLanguageModel(api_key="secret", base_url="https://api.deepseek.com", client=client)
     text = await model.complete([{"role": "user", "content": "привет"}])
     await client.aclose()
     assert text == "готово"
     assert seen["auth"] == "Bearer secret"
-    assert seen["body"]["model"] == "deepseek-chat"
+    assert seen["body"]["model"] == "deepseek-flash"
+    assert seen["body"]["thinking"] == {"type": "disabled"}
+    assert seen["body"]["tools"] == [{"type": "deepseek_web_search"}]
     assert seen["body"]["messages"][0]["content"] == "привет"
 
 
