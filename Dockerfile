@@ -1,10 +1,10 @@
-# Production image for Timeweb Cloud Apps (build context = repository root).
-# language=docker, empty build/run commands. EXPOSE selects the listen port.
+# Production image (build context = repository root).
+# The API key is a runtime environment variable, not a build argument.
 FROM python:3.13-slim
 
 WORKDIR /app
 
-# Timeweb Apps probes /health with curl inside the container. Slim does not ship it.
+# The host probes /health with curl inside the container. Slim does not ship it.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*

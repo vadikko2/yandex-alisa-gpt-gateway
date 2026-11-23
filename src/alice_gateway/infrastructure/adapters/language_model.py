@@ -10,8 +10,8 @@ from alice_gateway.service.ports.language_model import ChatMessage, LanguageMode
 
 logger = logging.getLogger(__name__)
 
-# Request model name is ignored by an AI Agent endpoint: the agent uses its own model.
-DEFAULT_TIMEWEB_MODEL = "deepseek-v4-flash"
+DEFAULT_BASE_URL = "https://api.deepseek.com"
+DEFAULT_MODEL = "deepseek-chat"
 _CHAT_COMPLETIONS_SUFFIX = "/chat/completions"
 
 
@@ -24,8 +24,7 @@ def normalize_openai_compatible_root(base_url: str) -> str:
 
 
 def message_body(*, model: str, messages: Sequence[ChatMessage]) -> dict[str, Any]:
-    # Omit temperature and max_tokens. GPT-5 family agents reject them.
-    # Sampling and length stay on the agent, so swapping agents does not require a code change.
+    # Same body for every OpenAI-compatible provider. Sampling stays on the provider.
     return {
         "model": model,
         "stream": False,
@@ -35,26 +34,26 @@ def message_body(*, model: str, messages: Sequence[ChatMessage]) -> dict[str, An
 
 class StubLanguageModel(LanguageModel):
     async def complete(self, messages: Sequence[ChatMessage]) -> str:
-        return "Языковая модель не настроена. Укажите TIMEWEB_API_KEY и TIMEWEB_BASE_URL и перезапустите сервис."
+        return "Языковая модель не настроена. Укажите LLM_API_KEY и перезапустите сервис."
 
 
-class TimewebLanguageModel(LanguageModel):
+class OpenAICompatibleLanguageModel(LanguageModel):
     def __init__(
         self,
         *,
         api_key: str,
-        base_url: str,
-        model: str = DEFAULT_TIMEWEB_MODEL,
+        base_url: str = DEFAULT_BASE_URL,
+        model: str = DEFAULT_MODEL,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         if not api_key.strip():
-            raise ValueError("TIMEWEB_API_KEY is required")
+            raise ValueError("LLM_API_KEY is required")
         if not base_url.strip():
-            raise ValueError("TIMEWEB_BASE_URL is required")
+            raise ValueError("LLM_BASE_URL is required")
         self._api_key = api_key
         self._base_url = normalize_openai_compatible_root(base_url)
         if not self._base_url:
-            raise ValueError("TIMEWEB_BASE_URL is required")
+            raise ValueError("LLM_BASE_URL is required")
         self._model = model
         self._client = client
         self._owns_client = client is None

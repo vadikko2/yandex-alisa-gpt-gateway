@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from alice_gateway.infrastructure.adapters.language_model import (
-    TimewebLanguageModel,
+    OpenAICompatibleLanguageModel,
     message_body,
     normalize_openai_compatible_root,
 )
@@ -46,8 +46,8 @@ class ScriptedLanguageModel:
 
 def _settings(**overrides: object) -> Settings:
     values: dict[str, object] = {
-        "timeweb_api_key": "test-key",
-        "timeweb_base_url": "https://agent.example/v1",
+        "llm_api_key": "test-key",
+        "llm_base_url": "https://api.example/v1",
         "alice_reply_budget_seconds": 2,
         "system_prompt": "test system prompt",
     }
@@ -77,9 +77,9 @@ def _handler(model: ScriptedLanguageModel, settings: Settings | None = None) -> 
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("https://agent.example/v1", "https://agent.example/v1"),
-        ("https://agent.example/v1/", "https://agent.example/v1"),
-        ("https://agent.example/v1/chat/completions", "https://agent.example/v1"),
+        ("https://api.deepseek.com", "https://api.deepseek.com"),
+        ("https://api.deepseek.com/", "https://api.deepseek.com"),
+        ("https://api.example/v1/chat/completions", "https://api.example/v1"),
     ],
 )
 def test_normalize_openai_compatible_root(raw: str, expected: str) -> None:
@@ -87,27 +87,21 @@ def test_normalize_openai_compatible_root(raw: str, expected: str) -> None:
 
 
 def test_message_body_omits_sampling_params() -> None:
-    body = message_body(model="deepseek-v4-flash", messages=[{"role": "user", "content": "привет"}])
+    body = message_body(model="deepseek-chat", messages=[{"role": "user", "content": "привет"}])
     assert "temperature" not in body
     assert "max_tokens" not in body
     assert body["stream"] is False
 
 
-def test_chat_completions_url_follows_the_configured_agent() -> None:
-    first = TimewebLanguageModel(
-        api_key="key-a",
-        base_url="https://agent.timeweb.cloud/api/v1/cloud-ai/agents/agent-a/v1",
-    )
-    second = TimewebLanguageModel(
-        api_key="key-b",
-        base_url="https://agent.timeweb.cloud/api/v1/cloud-ai/agents/agent-b/v1/chat/completions",
-    )
-    assert first.chat_completions_url.endswith("/agents/agent-a/v1/chat/completions")
-    assert second.chat_completions_url.endswith("/agents/agent-b/v1/chat/completions")
+def test_chat_completions_url_uses_the_configured_root() -> None:
+    first = OpenAICompatibleLanguageModel(api_key="key-a", base_url="https://api.deepseek.com")
+    second = OpenAICompatibleLanguageModel(api_key="key-b", base_url="https://api.example/v1/chat/completions")
+    assert first.chat_completions_url == "https://api.deepseek.com/chat/completions"
+    assert second.chat_completions_url == "https://api.example/v1/chat/completions"
 
 
 @pytest.mark.asyncio
-async def test_timeweb_adapter_posts_bearer_and_reads_content() -> None:
+async def test_openai_compatible_client_posts_bearer_and_reads_content() -> None:
     seen: dict[str, object] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -116,11 +110,12 @@ async def test_timeweb_adapter_posts_bearer_and_reads_content() -> None:
         return httpx.Response(200, json={"choices": [{"message": {"content": "  готово  "}}]})
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    model = TimewebLanguageModel(api_key="secret", base_url="https://agent.example/v1", client=client)
+    model = OpenAICompatibleLanguageModel(api_key="secret", base_url="https://api.example/v1", client=client)
     text = await model.complete([{"role": "user", "content": "привет"}])
     await client.aclose()
     assert text == "готово"
     assert seen["auth"] == "Bearer secret"
+    assert seen["body"]["model"] == "deepseek-chat"
     assert seen["body"]["messages"][0]["content"] == "привет"
 
 
@@ -194,8 +189,8 @@ def test_alice_response_shape() -> None:
 
 
 def test_health_and_welcome_over_http(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TIMEWEB_API_KEY", "")
-    monkeypatch.setenv("TIMEWEB_BASE_URL", "")
+    monkeypatch.setenv("LLM_API_KEY", "")
+    monkeypatch.setenv("LLM_BASE_URL", "")
     with TestClient(create_app()) as client:
         health = client.get("/health")
         assert health.status_code == 200
@@ -242,8 +237,8 @@ def test_successful_alice_hit_logs_caller_and_address(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    monkeypatch.setenv("TIMEWEB_API_KEY", "")
-    monkeypatch.setenv("TIMEWEB_BASE_URL", "")
+    monkeypatch.setenv("LLM_API_KEY", "")
+    monkeypatch.setenv("LLM_BASE_URL", "")
     payload = {
         "version": "1.0",
         "session": {
@@ -287,8 +282,8 @@ def test_published_yandex_ranges_include_dialogs_console() -> None:
 
 
 def test_alice_rejects_address_outside_yandex(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TIMEWEB_API_KEY", "")
-    monkeypatch.setenv("TIMEWEB_BASE_URL", "")
+    monkeypatch.setenv("LLM_API_KEY", "")
+    monkeypatch.setenv("LLM_BASE_URL", "")
     with TestClient(create_app()) as client:
         denied = client.post(
             "/alice",

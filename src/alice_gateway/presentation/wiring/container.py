@@ -5,19 +5,22 @@ from cqrs.bootstrap import requests as bootstrap
 from cqrs.container.dependency_injector import DependencyInjectorCQRSContainer
 from dependency_injector import containers, providers
 
-from alice_gateway.infrastructure.adapters.language_model import StubLanguageModel, TimewebLanguageModel
+from alice_gateway.infrastructure.adapters.language_model import (
+    OpenAICompatibleLanguageModel,
+    StubLanguageModel,
+)
 from alice_gateway.infrastructure.dialogs import DialogStore
 from alice_gateway.service.handlers.commands.reply import ReplyToUtteranceCommandHandler
 from alice_gateway.service.models.commands.reply import ReplyToUtteranceCommand
 from alice_gateway.shared.settings import Settings, load_settings
 
 
-def build_language_model(settings: Settings) -> StubLanguageModel | TimewebLanguageModel:
-    if settings.timeweb_api_key.strip() and settings.timeweb_base_url.strip():
-        return TimewebLanguageModel(
-            api_key=settings.timeweb_api_key,
-            base_url=settings.timeweb_base_url,
-            model=settings.timeweb_model,
+def build_language_model(settings: Settings) -> StubLanguageModel | OpenAICompatibleLanguageModel:
+    if settings.llm_api_key.strip():
+        return OpenAICompatibleLanguageModel(
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_base_url,
+            model=settings.llm_model,
         )
     return StubLanguageModel()
 

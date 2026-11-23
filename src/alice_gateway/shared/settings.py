@@ -28,9 +28,9 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    timeweb_api_key: str = Field(default="", validation_alias="TIMEWEB_API_KEY")
-    timeweb_base_url: str = Field(default="", validation_alias="TIMEWEB_BASE_URL")
-    timeweb_model: str = Field(default="deepseek-v4-flash", validation_alias="TIMEWEB_MODEL")
+    llm_api_key: str = Field(default="", validation_alias="LLM_API_KEY")
+    llm_base_url: str = Field(default="https://api.deepseek.com", validation_alias="LLM_BASE_URL")
+    llm_model: str = Field(default="deepseek-chat", validation_alias="LLM_MODEL")
     system_prompt_path: str = Field(
         default=DEFAULT_SYSTEM_PROMPT_PATH,
         validation_alias="SYSTEM_PROMPT_PATH",

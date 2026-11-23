@@ -14,8 +14,8 @@ class Dialog:
 class DialogStore:
     """In-process transcript for one App instance.
 
-    Alice session state is too small for a chat transcript, and Timeweb Apps
-    keeps a single backend container. A new deploy starts with an empty store.
+    Alice session state is too small for a chat transcript, and this process
+    keeps one in-memory store. A new deploy starts empty.
     """
 
     def __init__(self, *, max_sessions: int = 200, max_messages: int = 8) -> None:
