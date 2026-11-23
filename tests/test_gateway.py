@@ -49,6 +49,14 @@ def _settings(**overrides: object) -> Settings:
     return Settings(**values)  # type: ignore[arg-type]
 
 
+@pytest.fixture(autouse=True)
+def _skip_live_yandex_ip_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def refresh() -> None:
+        return None
+
+    monkeypatch.setattr("alice_gateway.presentation.main._refresh_yandex_ips", refresh)
+
+
 def _handler(model: ScriptedLanguageModel, settings: Settings | None = None) -> ReplyToUtteranceCommandHandler:
     return ReplyToUtteranceCommandHandler(
         language_model=model,

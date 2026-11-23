@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import logging
+import re
 import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
+import httpx
 import uvicorn
 from fastapi import FastAPI, Request
 
@@ -17,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(message)s"
 _LOG_DATEFMT = "%Y-%m-%dT%H:%M:%S%z"
+yandex_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+_CIDR = re.compile(r"(?:\d{1,3}\.){3}\d{1,3}/\d{1,3}|(?:[0-9a-fA-F]{1,4}:){2,}[0-9a-fA-F:]*/\d{1,3}")
 
 
 def configure_logging() -> None:
@@ -57,6 +63,20 @@ def _caller(body: dict[str, Any]) -> tuple[str, str]:
     return _token(user_id), _token(application.get("application_id"))
 
 
+async def _refresh_yandex_ips() -> None:
+    while True:
+        try:
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
+                page = (await client.get("https://yandex.ru/ips")).text
+            found = list(dict.fromkeys(ipaddress.ip_network(token) for token in _CIDR.findall(page)))
+            if found:
+                yandex_networks[:] = found
+                logger.info("yandex ips cached networks=%s", len(found))
+        except Exception:
+            logger.warning("yandex ips refresh failed", exc_info=True)
+        await asyncio.sleep(86400)
+
+
 def _client_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for", "")
     if forwarded:
@@ -76,10 +96,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     container = build_container()
     app.state.mediator = build_mediator(container)
     app.state.language_model = container.language_model()
-    yield
-    close = getattr(app.state.language_model, "aclose", None)
-    if close is not None:
-        await close()
+    refresh_task = asyncio.create_task(_refresh_yandex_ips())
+    try:
+        yield
+    finally:
+        refresh_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await refresh_task
+        close = getattr(app.state.language_model, "aclose", None)
+        if close is not None:
+            await close()
 
 
 def create_app() -> FastAPI:
