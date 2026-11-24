@@ -7,7 +7,12 @@ import cqrs
 
 from alice_gateway.infrastructure.dialogs import Dialog, DialogStore
 from alice_gateway.service.models.commands.reply import ReplyToUtteranceCommand, ReplyToUtteranceResult
-from alice_gateway.service.ports.language_model import ChatMessage, LanguageModel, LanguageModelError
+from alice_gateway.service.ports.language_model import (
+    ChatMessage,
+    LanguageModel,
+    LanguageModelError,
+    ModelCompletion,
+)
 from alice_gateway.shared.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -66,6 +71,13 @@ def _normalize(text: str) -> str:
     return text.strip().lower().rstrip(".!?…")
 
 
+def _assistant_message(text: str, reasoning_content: str | None) -> ChatMessage:
+    message: ChatMessage = {"role": "assistant", "content": text}
+    if reasoning_content is not None:
+        message["reasoning_content"] = reasoning_content
+    return message
+
+
 class ReplyToUtteranceCommandHandler(cqrs.RequestHandler[ReplyToUtteranceCommand]):
     def __init__(self, language_model: LanguageModel, dialogs: DialogStore, settings: Settings) -> None:
         self._language_model = language_model
@@ -118,7 +130,7 @@ class ReplyToUtteranceCommandHandler(cqrs.RequestHandler[ReplyToUtteranceCommand
         task = asyncio.create_task(self._complete(messages))
         dialog.pending = task
         try:
-            text = await asyncio.wait_for(
+            completion = await asyncio.wait_for(
                 asyncio.shield(task),
                 timeout=self._settings.alice_reply_budget_seconds,
             )
@@ -129,10 +141,10 @@ class ReplyToUtteranceCommandHandler(cqrs.RequestHandler[ReplyToUtteranceCommand
             logger.warning("language model failed for session %s", request.session_id, exc_info=True)
             return ReplyToUtteranceResult(text=ERROR_TEXT)
         dialog.pending = None
-        if not text.strip():
+        if not completion.text.strip():
             return ReplyToUtteranceResult(text=ERROR_TEXT)
-        fitted = fit_alice_text(text)
-        dialog.messages.append({"role": "assistant", "content": fitted})
+        fitted = fit_alice_text(completion.text)
+        dialog.messages.append(_assistant_message(fitted, completion.reasoning_content))
         self._dialogs.trim(dialog)
         return ReplyToUtteranceResult(text=fitted)
 
@@ -142,16 +154,16 @@ class ReplyToUtteranceCommandHandler(cqrs.RequestHandler[ReplyToUtteranceCommand
         if task is None:
             return None
         try:
-            text = task.result()
+            completion = task.result()
         except (LanguageModelError, asyncio.CancelledError, Exception):
             logger.warning("pending language model call failed", exc_info=True)
             return None
-        if not text.strip():
+        if not completion.text.strip():
             return None
-        fitted = fit_alice_text(text)
-        dialog.messages.append({"role": "assistant", "content": fitted})
+        fitted = fit_alice_text(completion.text)
+        dialog.messages.append(_assistant_message(fitted, completion.reasoning_content))
         self._dialogs.trim(dialog)
         return fitted
 
-    async def _complete(self, messages: list[ChatMessage]) -> str:
+    async def _complete(self, messages: list[ChatMessage]) -> ModelCompletion:
         return await self._language_model.complete(messages)

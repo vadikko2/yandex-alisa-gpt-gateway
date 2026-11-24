@@ -13,6 +13,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, Request
 
+from alice_gateway.presentation.open_sessions import OpenSessions, caller_identity, open_session_limit_text
 from alice_gateway.presentation.protocol import alice_response, command_from_body
 from alice_gateway.presentation.wiring.container import build_container, build_mediator
 from alice_gateway.service.models.commands.reply import ReplyToUtteranceResult
@@ -143,6 +144,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
+    settings = load_settings()
+    sessions = OpenSessions(settings.max_open_sessions, settings.open_session_idle_seconds)
     app = FastAPI(title="Yandex Alice GPT gateway", lifespan=lifespan)
 
     @app.get("/health")
@@ -163,7 +166,21 @@ def create_app() -> FastAPI:
         body = await request.json()
         payload = body if isinstance(body, dict) else {}
         command = command_from_body(payload)
+        identity = caller_identity(payload)
+        if identity and not sessions.allow(identity, command.session_id):
+            logger.info(
+                "POST /alice 200 ip=%s identity=%s session=%s open_sessions=%s",
+                _client_ip(request),
+                identity,
+                command.session_id,
+                sessions.limit,
+            )
+            return alice_response(
+                ReplyToUtteranceResult(text=open_session_limit_text(sessions.limit), end_session=True),
+            )
         result = await request.app.state.mediator.send(command)
+        if result.end_session:
+            sessions.release(identity, command.session_id)
         user_id, application_id = _caller(payload)
         logger.info(
             "POST /alice 200 ms=%s user=%s app=%s ip=%s session=%s text=%s",

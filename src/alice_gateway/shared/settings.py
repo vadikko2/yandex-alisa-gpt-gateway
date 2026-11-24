@@ -36,6 +36,8 @@ class Settings(BaseSettings):
         validation_alias="SYSTEM_PROMPT_PATH",
     )
     alice_reply_budget_seconds: float = Field(default=3.0, validation_alias="ALICE_REPLY_BUDGET_SECONDS")
+    max_open_sessions: int = Field(default=1, ge=1, validation_alias="MAX_OPEN_SESSIONS")
+    open_session_idle_seconds: int = Field(default=1800, ge=1, validation_alias="OPEN_SESSION_IDLE_SECONDS")
     host: str = Field(default="0.0.0.0", validation_alias="HOST")
     port: int = Field(default=8080, validation_alias="PORT")
     system_prompt: str = Field(default="", exclude=True)

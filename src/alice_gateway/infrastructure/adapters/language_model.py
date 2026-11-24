@@ -7,7 +7,12 @@ from urllib.parse import urlparse
 
 import httpx
 
-from alice_gateway.service.ports.language_model import ChatMessage, LanguageModel, LanguageModelError
+from alice_gateway.service.ports.language_model import (
+    ChatMessage,
+    LanguageModel,
+    LanguageModelError,
+    ModelCompletion,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +54,8 @@ def message_body(
 
 
 class StubLanguageModel(LanguageModel):
-    async def complete(self, messages: Sequence[ChatMessage]) -> str:
-        return "Языковая модель не настроена. Укажите LLM_API_KEY и перезапустите сервис."
+    async def complete(self, messages: Sequence[ChatMessage]) -> ModelCompletion:
+        return ModelCompletion(text="Языковая модель не настроена. Укажите LLM_API_KEY и перезапустите сервис.")
 
 
 class OpenAICompatibleLanguageModel(LanguageModel):
@@ -95,7 +100,7 @@ class OpenAICompatibleLanguageModel(LanguageModel):
             self._client = httpx.AsyncClient(timeout=120.0)
         return self._client
 
-    async def complete(self, messages: Sequence[ChatMessage]) -> str:
+    async def complete(self, messages: Sequence[ChatMessage]) -> ModelCompletion:
         client = await self._http()
         try:
             response = await client.post(
@@ -105,21 +110,41 @@ class OpenAICompatibleLanguageModel(LanguageModel):
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            logger.warning("language model request failed: %s", exc.__class__.__name__)
-            raise LanguageModelError("language model request failed") from exc
-        payload = response.json()
-        content = _content_from_payload(payload)
-        if not content:
+            detail = _error_detail(exc)
+            logger.warning("language model request failed: %s", detail)
+            raise LanguageModelError(f"language model request failed: {detail}") from exc
+        text, reasoning = _message_from_payload(response.json())
+        if not text:
             raise LanguageModelError("language model returned empty content")
-        return content
+        # With tools declared, DeepSeek returns 400 on the next turn unless every
+        # earlier assistant message carries reasoning_content. An empty string is
+        # accepted when that turn had none.
+        if self._web_search:
+            reasoning = reasoning or ""
+        else:
+            reasoning = None
+        return ModelCompletion(text=text, reasoning_content=reasoning)
 
 
-def _content_from_payload(payload: dict[str, Any]) -> str:
+def _error_detail(exc: httpx.HTTPError) -> str:
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return exc.__class__.__name__
+    body = " ".join(exc.response.text.split())
+    if len(body) > 500:
+        body = body[:500] + "…"
+    return f"HTTP {exc.response.status_code} {body}".strip()
+
+
+def _message_from_payload(payload: dict[str, Any]) -> tuple[str, str | None]:
     choices = payload.get("choices") or []
     if not choices:
-        return ""
+        return "", None
     message = choices[0].get("message") or {}
     content = message.get("content")
-    if not isinstance(content, str):
-        return ""
-    return content.strip()
+    text = content.strip() if isinstance(content, str) else ""
+    reasoning = message.get("reasoning_content")
+    if reasoning is None:
+        return text, None
+    if not isinstance(reasoning, str):
+        return text, ""
+    return text, reasoning

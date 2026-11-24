@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 
+from alice_gateway.service.ports.language_model import ModelCompletion
+
 
 @dataclass
 class Dialog:
     messages: list[dict[str, str]] = field(default_factory=list)
-    pending: asyncio.Task[str] | None = None
+    pending: asyncio.Task[ModelCompletion] | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 

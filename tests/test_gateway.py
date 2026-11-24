@@ -22,6 +22,7 @@ from alice_gateway.presentation.main import (
     create_app,
     yandex_networks,
 )
+from alice_gateway.presentation.open_sessions import OpenSessions, open_session_limit_text
 from alice_gateway.presentation.protocol import alice_response, command_from_body
 from alice_gateway.service.handlers.commands.reply import (
     WELCOME_TEXT,
@@ -29,20 +30,22 @@ from alice_gateway.service.handlers.commands.reply import (
     fit_alice_text,
 )
 from alice_gateway.service.models.commands.reply import ReplyToUtteranceCommand, ReplyToUtteranceResult
+from alice_gateway.service.ports.language_model import ModelCompletion
 from alice_gateway.shared.settings import Settings, load_settings, read_system_prompt
 
 
 class ScriptedLanguageModel:
-    def __init__(self, text: str, delay: float = 0) -> None:
+    def __init__(self, text: str, delay: float = 0, reasoning_content: str | None = None) -> None:
         self.text = text
         self.delay = delay
+        self.reasoning_content = reasoning_content
         self.seen: list[list[dict[str, str]]] = []
 
-    async def complete(self, messages: list[dict[str, str]]) -> str:
+    async def complete(self, messages: list[dict[str, str]]) -> ModelCompletion:
         self.seen.append(list(messages))
         if self.delay:
             await asyncio.sleep(self.delay)
-        return self.text
+        return ModelCompletion(text=self.text, reasoning_content=self.reasoning_content)
 
 
 def _settings(**overrides: object) -> Settings:
@@ -126,14 +129,83 @@ async def test_openai_compatible_client_posts_bearer_and_reads_content() -> None
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     model = OpenAICompatibleLanguageModel(api_key="secret", base_url="https://api.deepseek.com", client=client)
-    text = await model.complete([{"role": "user", "content": "привет"}])
+    completion = await model.complete([{"role": "user", "content": "привет"}])
     await client.aclose()
-    assert text == "готово"
+    assert completion.text == "готово"
+    assert completion.reasoning_content == ""
     assert seen["auth"] == "Bearer secret"
     assert seen["body"]["model"] == "deepseek-flash"
     assert seen["body"]["thinking"] == {"type": "enabled"}
     assert seen["body"]["tools"] == [{"type": "deepseek_web_search"}]
     assert seen["body"]["messages"][0]["content"] == "привет"
+
+
+@pytest.mark.asyncio
+async def test_deepseek_completion_keeps_reasoning_content() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": " в Москве ясно ",
+                            "reasoning_content": "проверил погоду",
+                        },
+                    },
+                ],
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    model = OpenAICompatibleLanguageModel(api_key="secret", base_url="https://api.deepseek.com", client=client)
+    completion = await model.complete([{"role": "user", "content": "погода"}])
+    await client.aclose()
+    assert completion.text == "в Москве ясно"
+    assert completion.reasoning_content == "проверил погоду"
+
+
+@pytest.mark.asyncio
+async def test_other_provider_drops_reasoning_content() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "ок", "reasoning_content": "не нужно"}}]},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    model = OpenAICompatibleLanguageModel(api_key="secret", base_url="https://api.example/v1", client=client)
+    completion = await model.complete([{"role": "user", "content": "привет"}])
+    await client.aclose()
+    assert completion.text == "ок"
+    assert completion.reasoning_content is None
+
+
+@pytest.mark.asyncio
+async def test_status_error_includes_response_body() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={"error": {"message": "The reasoning_content in the thinking mode must be passed back to the API."}},
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    model = OpenAICompatibleLanguageModel(api_key="secret", base_url="https://api.deepseek.com", client=client)
+    with pytest.raises(Exception, match="reasoning_content") as caught:
+        await model.complete([{"role": "user", "content": "ещё"}])
+    await client.aclose()
+    assert "HTTP 400" in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_follow_up_sends_previous_reasoning_content() -> None:
+    model = ScriptedLanguageModel("Ответ раз", reasoning_content="думал")
+    handler = _handler(model)
+    await handler.handle(ReplyToUtteranceCommand(session_id="s1", session_new=True, utterance="Привет"))
+    await handler.handle(ReplyToUtteranceCommand(session_id="s1", session_new=False, utterance="Ещё"))
+    assistant = model.seen[1][2]
+    assert assistant == {"role": "assistant", "content": "Ответ раз", "reasoning_content": "думал"}
 
 
 def test_fit_alice_text_cuts_on_a_sentence() -> None:
@@ -314,3 +386,136 @@ def test_alice_rejects_address_outside_yandex(monkeypatch: pytest.MonkeyPatch) -
         "version": "1.0",
     }
     assert health.status_code == 200
+
+
+def _alice_turn(
+    client: TestClient,
+    session_id: str,
+    *,
+    user_id: str | None = "user-1",
+    application_id: str | None = None,
+    text: str = "",
+    new: bool = True,
+    forwarded_for: str = "203.0.113.9",
+):
+    session: dict[str, object] = {"session_id": session_id, "new": new, "message_id": 0, "skill_id": "skill"}
+    if user_id is not None:
+        session["user"] = {"user_id": user_id}
+    if application_id is not None:
+        session["application"] = {"application_id": application_id}
+    return client.post(
+        "/alice",
+        headers={"x-forwarded-for": forwarded_for},
+        json={
+            "version": "1.0",
+            "session": session,
+            "request": {"type": "SimpleUtterance", "command": text, "original_utterance": text},
+        },
+    )
+
+
+def test_open_session_slot_frees_on_idle_and_on_close() -> None:
+    sessions = OpenSessions(1, 10)
+    assert sessions.allow("user:1", "a", now=0)
+    assert sessions.allow("user:1", "a", now=9)
+    assert not sessions.allow("user:1", "b", now=9)
+    sessions.release("user:1", "a")
+    assert sessions.allow("user:1", "b", now=9)
+    assert sessions.allow("user:1", "c", now=19)
+
+
+def test_second_open_session_is_told_the_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "")
+    monkeypatch.setenv("LLM_BASE_URL", "")
+    monkeypatch.setenv("MAX_OPEN_SESSIONS", "1")
+    with TestClient(create_app()) as client:
+        first = _alice_turn(client, "s-a")
+        other_user = _alice_turn(client, "s-c", user_id="user-2")
+        second = _alice_turn(client, "s-b")
+        continued = _alice_turn(client, "s-a", new=False, text="ещё")
+    assert first.status_code == 200
+    assert first.json()["response"]["text"] == WELCOME_TEXT
+    assert other_user.json()["response"]["text"] == WELCOME_TEXT
+    assert second.status_code == 200
+    assert second.json() == {
+        "response": {"text": open_session_limit_text(1), "end_session": True},
+        "version": "1.0",
+    }
+    assert continued.json()["response"]["end_session"] is False
+    assert continued.json()["response"]["text"] != open_session_limit_text(1)
+
+
+def test_ended_session_frees_the_open_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "")
+    monkeypatch.setenv("LLM_BASE_URL", "")
+    monkeypatch.setenv("MAX_OPEN_SESSIONS", "1")
+    with TestClient(create_app()) as client:
+        _alice_turn(client, "s-a")
+        stopped = _alice_turn(client, "s-a", new=False, text="хватит")
+        restarted = _alice_turn(client, "s-b")
+    assert stopped.json()["response"]["end_session"] is True
+    assert restarted.json()["response"]["text"] == WELCOME_TEXT
+
+
+def test_open_session_limit_uses_the_device_without_an_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "")
+    monkeypatch.setenv("LLM_BASE_URL", "")
+    monkeypatch.setenv("MAX_OPEN_SESSIONS", "1")
+    with TestClient(create_app()) as client:
+        phone = _alice_turn(client, "phone-1", user_id=None, application_id="phone")
+        phone_again = _alice_turn(client, "phone-2", user_id=None, application_id="phone")
+        station = _alice_turn(client, "station-1", user_id=None, application_id="station")
+    assert phone.json()["response"]["text"] == WELCOME_TEXT
+    assert phone_again.json()["response"]["text"] == open_session_limit_text(1)
+    assert station.json()["response"]["text"] == WELCOME_TEXT
+
+
+def test_open_session_limit_follows_the_account_across_devices(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "")
+    monkeypatch.setenv("LLM_BASE_URL", "")
+    monkeypatch.setenv("MAX_OPEN_SESSIONS", "1")
+    with TestClient(create_app()) as client:
+        phone = _alice_turn(client, "phone", application_id="phone")
+        station = _alice_turn(client, "station", application_id="station")
+    assert phone.json()["response"]["text"] == WELCOME_TEXT
+    assert station.json()["response"]["text"] == open_session_limit_text(1)
+
+
+def test_alice_without_a_caller_id_is_not_session_limited(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "")
+    monkeypatch.setenv("LLM_BASE_URL", "")
+    monkeypatch.setenv("MAX_OPEN_SESSIONS", "1")
+    with TestClient(create_app()) as client:
+        first = _alice_turn(client, "anon-1", user_id=None)
+        second = _alice_turn(client, "anon-2", user_id=None)
+    assert first.json()["response"]["text"] == WELCOME_TEXT
+    assert second.json()["response"]["text"] == WELCOME_TEXT
+
+
+def test_open_session_limit_text_includes_the_configured_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "")
+    monkeypatch.setenv("LLM_BASE_URL", "")
+    monkeypatch.setenv("MAX_OPEN_SESSIONS", "2")
+    with TestClient(create_app()) as client:
+        first = _alice_turn(client, "s-1")
+        second = _alice_turn(client, "s-2")
+        third = _alice_turn(client, "s-3")
+    assert first.json()["response"]["text"] == WELCOME_TEXT
+    assert second.json()["response"]["text"] == WELCOME_TEXT
+    assert third.json() == {
+        "response": {"text": open_session_limit_text(2), "end_session": True},
+        "version": "1.0",
+    }
+
+
+def test_address_outside_yandex_does_not_take_an_open_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_API_KEY", "")
+    monkeypatch.setenv("LLM_BASE_URL", "")
+    monkeypatch.setenv("MAX_OPEN_SESSIONS", "1")
+    with TestClient(create_app()) as client:
+        forged = _alice_turn(client, "forged", forwarded_for="198.51.100.4")
+        opened = _alice_turn(client, "real")
+        extra = _alice_turn(client, "real-2")
+    assert forged.json()["response"]["text"] == "Запрос должен быть с адресов Яндекса."
+    assert opened.json()["response"]["text"] == WELCOME_TEXT
+    assert extra.json()["response"]["text"] == open_session_limit_text(1)
