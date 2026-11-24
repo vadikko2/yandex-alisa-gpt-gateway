@@ -49,6 +49,10 @@ class DialogStore:
         overflow = len(dialog.messages) - self._max_messages
         if overflow > 0:
             del dialog.messages[:overflow]
+        # DeepSeek rejects a transcript whose first turn is assistant:
+        # "an assistant message must follow a user message".
+        while dialog.messages and dialog.messages[0].get("role") != "user":
+            del dialog.messages[0]
 
     def _evict(self) -> None:
         while len(self._order) > self._max_sessions:

@@ -246,6 +246,26 @@ async def test_fast_answer_is_returned_and_kept_in_the_transcript() -> None:
 
 
 @pytest.mark.asyncio
+async def test_trimmed_history_still_starts_with_user() -> None:
+    model = ScriptedLanguageModel("ok")
+    handler = _handler(model)
+    for index in range(5):
+        await handler.handle(
+            ReplyToUtteranceCommand(
+                session_id="s1",
+                session_new=index == 0,
+                utterance=f"вопрос {index}",
+            ),
+        )
+    roles = [message["role"] for message in model.seen[-1]]
+    assert roles[0] == "system"
+    assert roles[1] == "user"
+    for previous, role in zip(roles, roles[1:]):
+        if role == "assistant":
+            assert previous == "user"
+
+
+@pytest.mark.asyncio
 async def test_slow_model_asks_to_continue_and_then_delivers() -> None:
     model = ScriptedLanguageModel("Поздний ответ", delay=0.2)
     handler = _handler(model, _settings(alice_reply_budget_seconds=0.05))
